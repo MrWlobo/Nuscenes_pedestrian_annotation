@@ -1,18 +1,13 @@
-from nuscenes.nuscenes import NuScenes
-from nuscenes.utils.data_classes import Box
-from nuscenes.utils.geometry_utils import view_points
-from pyquaternion import Quaternion
-import matplotlib.pyplot as plt
 import os
-from PIL import Image
-import numpy as np
+
+from nuscenes.nuscenes import NuScenes
 
 project_folder = os.path.dirname(os.path.abspath(__file__))
 dataroot = os.path.join(project_folder, "v1.0-trainval08_blobs")
 version = "v1.0-trainval"
 nusc = NuScenes(version=version, dataroot=dataroot, verbose=True)
 
-camera_name = 'CAM_FRONT'
+camera_name = "CAM_FRONT"
 max_images = 1000
 
 nusc.list_scenes()

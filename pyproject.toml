@@ -1,0 +1,13 @@
+[project]
+name = "nuscenes-pedestrian-annotation"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy<2",
+    "nuscenes-devkit>=1.1.11",
+    "opencv-python<4.11",
+    "pillow>=12.2.0",
+    "pyquaternion>=0.9.9",
+]
