@@ -33,8 +33,12 @@ class NuScenesAnnotator:
         raw_ann_path = os.path.join(self.out_version_dir, "sample_annotation.json")
         with open(raw_ann_path, "r") as f:
             self.raw_annotations = json.load(f)
-
         self.raw_ann_map = {ann["token"]: ann for ann in self.raw_annotations}
+
+        raw_inst_path = os.path.join(self.out_version_dir, "instance.json")
+        with open(raw_inst_path, "r") as f:
+            self.raw_instances = json.load(f)
+        self.raw_inst_map = {inst["token"]: inst for inst in self.raw_instances}
 
         self.corrected_tokens = self.load_progress()
         if self.corrected_tokens:
@@ -51,6 +55,7 @@ class NuScenesAnnotator:
         self.current_anns = []
         self.selected_ann_idx = None
         self.cam_labels = {}
+        self._lock_traces = False
 
         self.cameras = [
             "CAM_FRONT_LEFT",
@@ -62,36 +67,29 @@ class NuScenesAnnotator:
         ]
 
         self.setup_ui()
-
         self.load_next_uncorrected(start_idx=0)
 
     def setup_workspace(self):
-        """Ensures output directory has all the necessary JSON files."""
         os.makedirs(self.out_version_dir, exist_ok=True)
-
         if os.path.exists(self.in_version_dir):
             for file in os.listdir(self.in_version_dir):
                 if file.endswith(".json"):
                     src = os.path.join(self.in_version_dir, file)
                     dst = os.path.join(self.out_version_dir, file)
-
                     if not os.path.exists(dst):
                         shutil.copy2(src, dst)
 
     def load_progress(self):
-        """Loads the set of already corrected sample tokens."""
         if os.path.exists(self.progress_file):
             with open(self.progress_file, "r") as f:
                 return set(json.load(f))
         return set()
 
     def save_progress(self):
-        """Saves the set of corrected sample tokens."""
         with open(self.progress_file, "w") as f:
             json.dump(list(self.corrected_tokens), f)
 
     def setup_ui(self):
-
         self.cam_frame = tk.Frame(self.master)
         self.cam_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -121,8 +119,16 @@ class NuScenesAnnotator:
         list_frame.pack(side=tk.LEFT, fill=tk.Y)
         tk.Label(list_frame, text="Annotations").pack()
         self.ann_listbox = tk.Listbox(list_frame, width=40, height=10)
-        self.ann_listbox.pack(side=tk.LEFT, fill=tk.Y)
+        self.ann_listbox.pack(side=tk.TOP, fill=tk.Y)
         self.ann_listbox.bind("<<ListboxSelect>>", self.on_ann_select)
+
+        tk.Button(
+            list_frame,
+            text="Delete Selected",
+            command=self.delete_annotation,
+            bg="red",
+            fg="white",
+        ).pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
         self.input_frame = tk.Frame(self.ctrl_frame)
         self.input_frame.pack(side=tk.LEFT, padx=20)
@@ -173,7 +179,6 @@ class NuScenesAnnotator:
             text="Skip to Next >",
             command=lambda: self.load_next_uncorrected(self.current_sample_idx + 1),
         ).pack(fill=tk.X, pady=2)
-
         tk.Button(
             btn_frame,
             text="Save & Next",
@@ -221,12 +226,10 @@ class NuScenesAnnotator:
             )
 
         self.selected_ann_idx = None
-
         status = "[CORRECTED] " if sample["token"] in self.corrected_tokens else ""
         self.master.title(
             f"{status}NuScenes Annotator - Sample {idx + 1}/{len(self.samples)}"
         )
-
         self.render_cameras()
 
     def on_ann_select(self, event):
@@ -240,8 +243,7 @@ class NuScenesAnnotator:
         q = Quaternion(ann["rotation"])
         yaw = np.degrees(q.yaw_pitch_roll[0])
 
-        for var in self.vars.values():
-            var.trace_vdelete("w", var.trace_info()[0][1])
+        self._lock_traces = True
 
         self.vars["x"].set(round(ann["translation"][0], 3))
         self.vars["y"].set(round(ann["translation"][1], 3))
@@ -251,13 +253,13 @@ class NuScenesAnnotator:
         self.vars["h"].set(round(ann["size"][2], 3))
         self.vars["yaw"].set(round(yaw, 2))
 
-        for var in self.vars.values():
-            var.trace_add("write", self.on_input_change)
+        self._lock_traces = False
 
         self.render_cameras()
 
     def on_input_change(self, *args):
-        if self.selected_ann_idx is None:
+
+        if self._lock_traces or self.selected_ann_idx is None:
             return
 
         try:
@@ -281,6 +283,68 @@ class NuScenesAnnotator:
         except tk.TclError:
             pass
 
+    def delete_annotation(self):
+        if self.selected_ann_idx is None:
+            return
+
+        if not messagebox.askyesno(
+            "Confirm Delete", "Are you sure you want to delete this bounding box?"
+        ):
+            return
+
+        ann_to_delete = self.current_anns[self.selected_ann_idx]
+        del_token = ann_to_delete["token"]
+
+        prev_tok = ann_to_delete.get("prev", "")
+        next_tok = ann_to_delete.get("next", "")
+        inst_tok = ann_to_delete.get("instance_token", "")
+
+        if prev_tok and prev_tok in self.raw_ann_map:
+            self.raw_ann_map[prev_tok]["next"] = next_tok
+        if next_tok and next_tok in self.raw_ann_map:
+            self.raw_ann_map[next_tok]["prev"] = prev_tok
+
+        try:
+            if prev_tok:
+                self.nusc.get("sample_annotation", prev_tok)["next"] = next_tok
+            if next_tok:
+                self.nusc.get("sample_annotation", next_tok)["prev"] = prev_tok
+        except KeyError:
+            pass
+
+        if inst_tok and inst_tok in self.raw_inst_map:
+            inst = self.raw_inst_map[inst_tok]
+            inst["nbr_annotations"] = max(0, inst["nbr_annotations"] - 1)
+            if inst["first_annotation_token"] == del_token:
+                inst["first_annotation_token"] = next_tok
+            if inst["last_annotation_token"] == del_token:
+                inst["last_annotation_token"] = prev_tok
+
+        self.current_anns.pop(self.selected_ann_idx)
+        self.ann_listbox.delete(self.selected_ann_idx)
+
+        if del_token in self.raw_ann_map:
+            del self.raw_ann_map[del_token]
+
+        self.raw_annotations = [
+            a for a in self.raw_annotations if a["token"] != del_token
+        ]
+        self.nusc.sample_annotation = [
+            a for a in self.nusc.sample_annotation if a["token"] != del_token
+        ]
+
+        sample = self.samples[self.current_sample_idx]
+        if del_token in sample["anns"]:
+            sample["anns"].remove(del_token)
+
+        self.selected_ann_idx = None
+        self._lock_traces = True
+        for var in self.vars.values():
+            var.set(0.0)
+        self._lock_traces = False
+
+        self.render_cameras()
+
     def render_cameras(self):
         sample = self.samples[self.current_sample_idx]
 
@@ -302,10 +366,8 @@ class NuScenesAnnotator:
 
             for i, ann in enumerate(self.current_anns):
                 box = Box(ann["translation"], ann["size"], Quaternion(ann["rotation"]))
-
                 box.translate(-np.array(pose_record["translation"]))
                 box.rotate(Quaternion(pose_record["rotation"]).inverse)
-
                 box.translate(-np.array(cs_record["translation"]))
                 box.rotate(Quaternion(cs_record["rotation"]).inverse)
 
@@ -326,12 +388,10 @@ class NuScenesAnnotator:
             img_resized = cv2.resize(img, (400, 225))
             img_pil = Image.fromarray(img_resized)
             img_tk = ImageTk.PhotoImage(image=img_pil)
-
             self.cam_labels[cam].config(image=img_tk)
             self.cam_labels[cam].image = img_tk
 
     def save_and_next(self):
-
         current_sample = self.samples[self.current_sample_idx]
         self.corrected_tokens.add(current_sample["token"])
 
@@ -344,10 +404,13 @@ class NuScenesAnnotator:
             raw_ann["size"] = ann["size"]
             raw_ann["rotation"] = ann["rotation"]
 
-        out_path = os.path.join(self.out_version_dir, "sample_annotation.json")
+        out_ann_path = os.path.join(self.out_version_dir, "sample_annotation.json")
+        out_inst_path = os.path.join(self.out_version_dir, "instance.json")
         try:
-            with open(out_path, "w") as f:
+            with open(out_ann_path, "w") as f:
                 json.dump(self.raw_annotations, f, indent=4)
+            with open(out_inst_path, "w") as f:
+                json.dump(self.raw_instances, f, indent=4)
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to save annotations: {str(e)}")
             return
