@@ -130,7 +130,6 @@ class NuScenesAnnotator:
             json.dump(list(self.corrected_tokens), f)
 
     def setup_ui(self):
-        # Top Frame: Cameras
         self.cam_frame = tk.Frame(self.master)
         self.cam_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -140,11 +139,9 @@ class NuScenesAnnotator:
             lbl.grid(row=row, column=col, padx=2, pady=2)
             self.cam_labels[cam] = lbl
 
-        # Bottom Frame: Master Container
         self.bottom_frame = tk.Frame(self.master)
         self.bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
 
-        # Progress Bar Header
         self.progress_frame = tk.Frame(self.bottom_frame)
         self.progress_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
         self.progress_var = tk.DoubleVar()
@@ -155,7 +152,6 @@ class NuScenesAnnotator:
         self.progress_label = tk.Label(self.progress_frame, text="")
         self.progress_label.pack(side=tk.RIGHT, padx=10)
 
-        # Control Panel Grid
         self.ctrl_frame = tk.Frame(self.bottom_frame)
         self.ctrl_frame.pack(side=tk.TOP, fill=tk.X)
         self.ctrl_frame.columnconfigure(0, weight=1)
@@ -163,7 +159,6 @@ class NuScenesAnnotator:
         self.ctrl_frame.columnconfigure(2, weight=1)
         self.ctrl_frame.columnconfigure(3, weight=1)
 
-        # Column 0: Listbox
         list_frame = tk.Frame(self.ctrl_frame)
         list_frame.grid(row=0, column=0, sticky="nsew", padx=5)
         tk.Label(list_frame, text="Annotations", font=("Arial", 9, "bold")).pack()
@@ -171,7 +166,6 @@ class NuScenesAnnotator:
         self.ann_listbox.pack(fill=tk.BOTH, expand=True)
         self.ann_listbox.bind("<<ListboxSelect>>", self.on_ann_select)
 
-        # Column 1: Action Buttons (Grid Layout)
         action_frame = tk.Frame(self.ctrl_frame)
         action_frame.grid(row=0, column=1, sticky="nsew", padx=5)
         tk.Label(action_frame, text="Track Actions", font=("Arial", 9, "bold")).grid(
@@ -186,6 +180,16 @@ class NuScenesAnnotator:
             fg="white",
             width=12,
         ).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+
+        tk.Button(
+            action_frame,
+            text="Rename Track",
+            command=self.rename_annotation,
+            bg="teal",
+            fg="white",
+            width=12,
+        ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
+
         tk.Button(
             action_frame,
             text="Propagate >",
@@ -193,14 +197,15 @@ class NuScenesAnnotator:
             bg="orange",
             fg="black",
             width=12,
-        ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
+        ).grid(row=2, column=0, padx=2, pady=2, sticky="ew")
+
         tk.Button(
             action_frame,
-            text="Delete Track (All)",
+            text="Delete Track",
             command=self.delete_annotation,
             bg="red",
             fg="white",
-        ).grid(row=2, column=0, columnspan=2, padx=2, pady=2, sticky="ew")
+        ).grid(row=2, column=1, padx=2, pady=2, sticky="ew")
 
         ttk.Separator(action_frame, orient="horizontal").grid(
             row=3, column=0, columnspan=2, sticky="ew", pady=6
@@ -228,7 +233,6 @@ class NuScenesAnnotator:
             fg="white",
         ).grid(row=6, column=1, padx=2, pady=2, sticky="ew")
 
-        # Column 2: Coordinate Inputs
         input_frame = tk.Frame(self.ctrl_frame)
         input_frame.grid(row=0, column=2, sticky="nsew", padx=5)
         tk.Label(input_frame, text="Properties", font=("Arial", 9, "bold")).grid(
@@ -259,7 +263,6 @@ class NuScenesAnnotator:
                 row=row + 1, column=col * 2 + 1, padx=2, pady=1
             )
 
-        # Column 3: Navigation & Status
         nav_frame = tk.Frame(self.ctrl_frame)
         nav_frame.grid(row=0, column=3, sticky="nsew", padx=5)
 
@@ -490,6 +493,33 @@ class NuScenesAnnotator:
         self.ann_listbox.selection_set(last_idx)
 
         self.on_ann_select(None)
+
+    def rename_annotation(self):
+        if self.selected_ann_idx is None:
+            return
+
+        categories = sorted([cat["name"] for cat in self.nusc.category])
+        dialog = CategoryDialog(self.master, categories)
+        new_cat_name = dialog.result
+
+        if not new_cat_name:
+            return
+
+        cat_token = next(
+            c["token"] for c in self.nusc.category if c["name"] == new_cat_name
+        )
+
+        ann = self.current_anns[self.selected_ann_idx]
+        inst_token = ann["instance_token"]
+
+        if inst_token in self.raw_inst_map:
+            self.raw_inst_map[inst_token]["category_token"] = cat_token
+
+        self.ann_listbox.delete(self.selected_ann_idx)
+        self.ann_listbox.insert(
+            self.selected_ann_idx, f"{new_cat_name} [{ann['token'][:6]}]"
+        )
+        self.ann_listbox.selection_set(self.selected_ann_idx)
 
     def propagate_to_next(self):
         if self.selected_ann_idx is None:
@@ -808,7 +838,6 @@ class NuScenesAnnotator:
     def save_and_next(self):
         current_sample = self.samples[self.current_sample_idx]
 
-        # Ensure it is marked as corrected upon saving
         self.corrected_tokens.add(current_sample["token"])
 
         self.save_progress()
